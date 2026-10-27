@@ -24,7 +24,7 @@ struct Provider {
     var weekly: UsageWindow? { windows.first { $0.name == "Weekly" || $0.name == "Weekly · all models" } }
     var menuText: String {
         let shortName = name == "Claude" ? "Cl" : "Cx"
-        let limits = [session.map { "S\(percent($0.used))" }, weekly.map { "W\(percent($0.used))" }].compactMap { $0 }
+        let limits = [session.map { "Session \(percent($0.used))" }, weekly.map { "Week \(percent($0.used))" }].compactMap { $0 }
         return shortName + " " + (limits.isEmpty ? "—" : limits.joined(separator: " "))
     }
 }
@@ -115,7 +115,7 @@ func readCodex() -> Provider {
     }
     do {
         try process.run()
-        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.0.2"]]])
+        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.0.3"]]])
         _ = try response(1)
         try send(["method": "initialized"])
         try send(["id": 2, "method": "account/rateLimits/read"])
@@ -240,8 +240,12 @@ func menuBarImage(_ providers: [Provider]) -> NSImage {
         var x: CGFloat = 0
         for (index, provider) in providers.enumerated() {
             let color = provider.name == "Claude" ? claudeColor : codexColor
-            drawRing(in: NSRect(x: x, y: 1, width: 20, height: 20), used: provider.session?.used, color: color, width: 2)
-            drawRing(in: NSRect(x: x + 4.5, y: 5.5, width: 11, height: 11), used: provider.weekly?.used, color: color, width: 2)
+            if let session = provider.session {
+                drawRing(in: NSRect(x: x, y: 1, width: 20, height: 20), used: session.used, color: color, width: 2)
+            }
+            if let weekly = provider.weekly {
+                drawRing(in: NSRect(x: x + 4.5, y: 5.5, width: 11, height: 11), used: weekly.used, color: color, width: 2)
+            }
             provider.menuText.draw(at: NSPoint(x: x + 26, y: 4), withAttributes: attributes)
             x += widths[index] + spacing
         }
@@ -411,12 +415,12 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(configuration.urlCredentialStorage == nil)
     let codex = codexSnapshot(["rateLimits": ["primary": ["usedPercent": 25, "windowDurationMins": 10080, "resetsAt": 1793602977], "secondary": NSNull()]])
     precondition(codex.windows.count == 1 && codex.primary?.name == "Weekly" && codex.primary?.remaining == 75)
-    precondition(codex.session == nil && codex.weekly?.used == 25 && codex.menuText == "Cx W25%")
+    precondition(codex.session == nil && codex.weekly?.used == 25 && codex.menuText == "Cx Week 25%")
     let multi = codexSnapshot(["rateLimitsByLimitId": ["codex": ["primary": ["usedPercent": 10, "windowDurationMins": 300], "secondary": ["usedPercent": 40, "windowDurationMins": 10080]], "other": ["primary": ["usedPercent": 60, "windowDurationMins": 60]]]])
     precondition(multi.windows.count == 3 && multi.primary?.name == "Session · 5 hours")
     let claude = claudeSnapshot(["five_hour": ["utilization": 23.5, "resets_at": "2026-10-27T19:00:00Z"], "seven_day": ["utilization": 41.2], "seven_day_opus": ["utilization": 0], "seven_day_sonnet": NSNull()])
     precondition(claude.windows.count == 3 && claude.primary?.reset != nil && claude.windows.last?.used == 0)
-    precondition(claude.session?.used == 23.5 && claude.weekly?.used == 41.2 && claude.menuText == "Cl S24% W41%")
+    precondition(claude.session?.used == 23.5 && claude.weekly?.used == 41.2 && claude.menuText == "Cl Session 24% Week 41%")
     precondition(Provider(name: "Claude").menuText == "Cl —")
     precondition(claudeSnapshot([:]).error != nil && codexSnapshot([:]).error != nil)
     precondition(UsageWindow(name: "test", used: 105, reset: nil).remaining == 0)
