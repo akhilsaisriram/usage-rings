@@ -13,7 +13,7 @@ zsh build.sh
 open "build/Usage Rings.app"
 ```
 
-The menu bar shows **Cl** (Claude) and **Cx** (Codex), each with concentric rings: **outer = session**, **inner = weekly**. **Session** and **Week** label the percentages used beside the rings. Each ring uses its provider color below 80%, orange from 80%, and red from 95%. Unavailable limits have no ring or percentage. Click for all quota windows returned by the provider, percentages used/remaining, reset countdowns and dates, credits where supplied, and connection status. Some Codex subscriptions return only a weekly window; that is displayed as weekly rather than inventing a session limit.
+The menu bar shows **Cl** (Claude) and **Cx** (Codex), each with concentric rings: **outer = session**, **inner = weekly**. Percentages appear as **session / weekly**, without words, for example `Cl 39% / 82%`. Each ring uses its provider color below 80%, orange from 80%, and red from 95%. Unavailable limits have no ring or percentage; a weekly-only Codex account shows `Cx 26%`. Click for all quota windows returned by the provider, percentages used/remaining, reset countdowns and dates, credits where supplied, and connection status.
 
 Refresh runs every five minutes, on wake, and manually. Errors replace current numbers so old values cannot appear live. Unavailable data uses a dash, never zero. No login-item changes are made; add the built app in System Settings → General → Login Items if desired. Command-drag its menu bar item to reposition it.
 
