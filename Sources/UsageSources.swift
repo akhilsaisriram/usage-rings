@@ -76,7 +76,11 @@ func setupClaudeFeed(at settingsURL: URL = home.appendingPathComponent(".claude/
     if FileManager.default.fileExists(atPath: helper.path) {
         _ = try FileManager.default.replaceItemAt(helper, withItemAt: staged)
     } else { try FileManager.default.moveItem(at: staged, to: helper) }
-    settings["statusLine"] = ["type": "command", "command": command]
+    var statusLine = settings["statusLine"] as? Object ?? [:]
+    statusLine["type"] = "command"
+    statusLine["command"] = command
+    statusLine["refreshInterval"] = 300
+    settings["statusLine"] = statusLine
     // Detect a concurrent settings edit before replacing the file.
     let unchanged = existed ? try Data(contentsOf: settingsURL) == oldData : !FileManager.default.fileExists(atPath: settingsURL.path)
     guard unchanged else {
@@ -193,7 +197,7 @@ final class CodexConnection {
         }
         process.terminationHandler = { [weak self] _ in self?.receive(Data(), generation: id) }
         try process.run()
-        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.1.0"]]])
+        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.1.1"]]])
         _ = try response(1)
         try send(["method": "initialized"])
     }

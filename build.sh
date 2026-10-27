@@ -11,8 +11,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>UsageRings</string>
 <key>CFBundleIdentifier</key><string>local.akhil.usagerings</string>
 <key>CFBundleName</key><string>Usage Rings</string>
-<key>CFBundleVersion</key><string>6</string>
-<key>CFBundleShortVersionString</key><string>1.1.0</string>
+<key>CFBundleVersion</key><string>7</string>
+<key>CFBundleShortVersionString</key><string>1.1.1</string>
 <key>LSUIElement</key><true/>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>

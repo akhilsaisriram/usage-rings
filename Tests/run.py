@@ -41,12 +41,18 @@ let settings = directory.appendingPathComponent("claude/settings.json")
 let support = directory.appendingPathComponent("support")
 try setupClaudeFeed(at: settings, directory: support)
 var configured = try JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as! Object
+precondition((configured["statusLine"] as? Object)?["refreshInterval"] as? Int == 300)
 precondition((configured["statusLine"] as? Object)?["command"] as? String == shellQuote(support.appendingPathComponent("UsageRingsFeed").path) + " --collect-claude")
 configured["unrelated"] = "preserve"
+var statusOptions = configured["statusLine"] as! Object
+statusOptions["padding"] = 2
+configured["statusLine"] = statusOptions
 try JSONSerialization.data(withJSONObject: configured).write(to: settings)
 try setupClaudeFeed(at: settings, directory: support)
 let preserved = try JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as! Object
 precondition(preserved["unrelated"] as? String == "preserve")
+precondition((preserved["statusLine"] as? Object)?["padding"] as? Int == 2)
+precondition((preserved["statusLine"] as? Object)?["refreshInterval"] as? Int == 300)
 precondition(FileManager.default.fileExists(atPath: support.appendingPathComponent("claude-settings-before-feed.json").path))
 configured["statusLine"] = ["type": "command", "command": "existing-status-line"]
 let originalSettings = try JSONSerialization.data(withJSONObject: configured)

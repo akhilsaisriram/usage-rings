@@ -193,7 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { self?.providers[1] = provider; self?.render() }
         }
         render(); refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.providers[0] = readClaudeFeed(); self.render()
         }
