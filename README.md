@@ -22,6 +22,7 @@ Refresh runs every five minutes, on wake, and manually. Errors replace current n
 - **Codex:** existing ChatGPT sign-in via `~/.local/bin/codex app-server`, using the documented initialize handshake and `account/rateLimits/read`. No model sessions are created. Run `codex login` in Terminal if needed.
 - **Claude:** reads `~/.claude/.credentials.json`, or the `Claude Code-credentials` Keychain item. Background reads never show a Keychain prompt. **Connect Claude** explicitly allows macOS to ask for access. Run `claude auth login` in Terminal if no subscription token is present. Browser login alone does not establish a readable terminal login.
 - Claude usage uses `https://api.anthropic.com/api/oauth/usage` with the existing access token. This is an internal endpoint used by usage trackers, not a documented stable public API, and can change. Credentials are never refreshed or rewritten by this app; Claude Code owns login renewal.
+- Claude requests use an ephemeral network session with URL caching, cookies, and credential storage disabled. Each session is invalidated after its request. This does not remove any caches created by older versions or control Codex CLI's own storage.
 - No tokens, cookie values, account IDs, or emails are logged or persisted. No browser cookie extraction. Diagnostic output includes only quota data and connection errors.
 - Absolute message/token allowances are displayed only if supplied by the provider; a percentage is not converted into an invented message count. Credit balances retain provider units.
 
@@ -34,5 +35,7 @@ open "build/Usage Rings.app" --args --preview
 ```
 
 `--diagnose --connect-claude` permits a foreground Keychain prompt. Rebuilding changes the ad-hoc signature and may require granting access again. No Git actions are part of this project.
+
+Local builds enable hardened runtime and verify their ad-hoc signature. They are not Developer ID signed or Apple notarized; macOS may still block downloaded builds.
 
 Sources: [Codex app server](https://learn.chatgpt.com/docs/app-server), [Claude status-line quota fields](https://code.claude.com/docs/en/statusline), [CodexBar Claude connection implementation notes](https://github.com/steipete/CodexBar/blob/main/docs/claude.md).

@@ -108,7 +108,7 @@ func readCodex() -> Provider {
     }
     do {
         try process.run()
-        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.0.0"]]])
+        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.0.1"]]])
         _ = try response(1)
         try send(["method": "initialized"])
         try send(["id": 2, "method": "account/rateLimits/read"])
@@ -136,6 +136,16 @@ func claudeSnapshot(_ result: Object) -> Provider {
     if out.windows.isEmpty { out.error = "Claude returned no quota windows." }
     else { out.updated = Date() }
     return out
+}
+
+func usageSessionConfiguration() -> URLSessionConfiguration {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.urlCache = nil
+    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+    configuration.httpCookieStorage = nil
+    configuration.httpShouldSetCookies = false
+    configuration.urlCredentialStorage = nil
+    return configuration
 }
 
 func readClaude(interactive: Bool) -> Provider {
@@ -171,7 +181,9 @@ func readClaude(interactive: Bool) -> Provider {
     request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
     let semaphore = DispatchSemaphore(value: 0)
     var payload: Data?, statusCode: Int?, failed = false
-    let task = URLSession.shared.dataTask(with: request) { data, response, error in
+    let session = URLSession(configuration: usageSessionConfiguration())
+    defer { session.invalidateAndCancel() }
+    let task = session.dataTask(with: request) { data, response, error in
         payload = data; statusCode = (response as? HTTPURLResponse)?.statusCode
         failed = error != nil; semaphore.signal()
     }
@@ -369,6 +381,11 @@ func diagnose(_ provider: Provider) -> Object {
      "details": provider.details]
 }
 if CommandLine.arguments.contains("--self-test") {
+    let configuration = usageSessionConfiguration()
+    precondition(configuration.urlCache == nil)
+    precondition(configuration.requestCachePolicy == .reloadIgnoringLocalCacheData)
+    precondition(configuration.httpCookieStorage == nil && !configuration.httpShouldSetCookies)
+    precondition(configuration.urlCredentialStorage == nil)
     let codex = codexSnapshot(["rateLimits": ["primary": ["usedPercent": 25, "windowDurationMins": 10080, "resetsAt": 1793602977], "secondary": NSNull()]])
     precondition(codex.windows.count == 1 && codex.primary?.name == "Weekly" && codex.primary?.remaining == 75)
     let multi = codexSnapshot(["rateLimitsByLimitId": ["codex": ["primary": ["usedPercent": 10, "windowDurationMins": 300], "secondary": ["usedPercent": 40, "windowDurationMins": 10080]], "other": ["primary": ["usedPercent": 60, "windowDurationMins": 60]]]])
@@ -377,7 +394,7 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(claude.windows.count == 3 && claude.primary?.reset != nil && claude.windows.last?.used == 0)
     precondition(claudeSnapshot([:]).error != nil && codexSnapshot([:]).error != nil)
     precondition(UsageWindow(name: "test", used: 105, reset: nil).remaining == 0)
-    print("Passed: weekly-only Codex, multi-bucket limits, Claude models, null/missing data, reset dates, remaining usage.")
+    print("Passed: network privacy settings, weekly-only Codex, multi-bucket limits, Claude models, null/missing data, reset dates, remaining usage.")
 } else if CommandLine.arguments.contains("--diagnose") {
     let results = [diagnose(readClaude(interactive: CommandLine.arguments.contains("--connect-claude"))), diagnose(readCodex())]
     if let data = try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys]), let s = String(data: data, encoding: .utf8) { print(s) }
