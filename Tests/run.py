@@ -78,6 +78,11 @@ precondition(preserved["unrelated"] as? String == "preserve")
 precondition((preserved["statusLine"] as? Object)?["padding"] as? Int == 2)
 precondition((preserved["statusLine"] as? Object)?["refreshInterval"] as? Int == 300)
 precondition(FileManager.default.fileExists(atPath: support.appendingPathComponent("claude-settings-before-feed.json").path))
+let verification = Process()
+verification.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+verification.arguments = ["--verify", "--strict", support.appendingPathComponent("UsageRingsFeed").path]
+try verification.run(); verification.waitUntilExit()
+precondition(verification.terminationStatus == 0)
 configured["statusLine"] = ["type": "command", "command": "existing-status-line"]
 let originalSettings = try JSONSerialization.data(withJSONObject: configured)
 try originalSettings.write(to: settings)

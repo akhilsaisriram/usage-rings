@@ -102,6 +102,14 @@ func setupClaudeFeed(at settingsURL: URL = home.appendingPathComponent(".claude/
     defer { try? FileManager.default.removeItem(at: staged) }
     try FileManager.default.copyItem(at: executable, to: staged)
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: staged.path)
+    // The copied executable is no longer inside its app bundle. Replace the
+    // bundle-dependent ad-hoc signature with a standalone hardened signature.
+    let signing = Process()
+    signing.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+    signing.arguments = ["--force", "--options", "runtime", "--sign", "-", "--identifier", "local.akhil.usagerings.feed", staged.path]
+    signing.standardOutput = FileHandle.nullDevice; signing.standardError = FileHandle.nullDevice
+    try signing.run(); signing.waitUntilExit()
+    guard signing.terminationStatus == 0 else { throw ReadError(message: "Could not sign the standalone Claude helper; previous helper retained.") }
     if FileManager.default.fileExists(atPath: helper.path) {
         _ = try FileManager.default.replaceItemAt(helper, withItemAt: staged)
     } else { try FileManager.default.moveItem(at: staged, to: helper) }
@@ -226,7 +234,7 @@ final class CodexConnection {
         }
         process.terminationHandler = { [weak self] _ in self?.receive(Data(), generation: id) }
         try process.run()
-        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.1.2"]]])
+        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.1.3"]]])
         _ = try response(1)
         try send(["method": "initialized"])
     }
