@@ -37,6 +37,30 @@ try Data("not json".utf8).write(to: cache)
 precondition(readClaudeFeed(at: cache).error != nil)
 let sessionOnly = claudeSnapshot(["five_hour": ["utilization": 10]])
 precondition(sessionOnly.menuText == "Cl 10%" && sessionOnly.weekly == nil)
+let reset = Date().addingTimeInterval(3600).timeIntervalSince1970
+func sample(_ used: Double, reset: Double) -> Object {
+    return sanitizedClaudeFeed(["rate_limits": ["five_hour": ["used_percentage": used, "resets_at": reset]]])!
+}
+let high = sample(45, reset: reset)
+let lower = sample(43, reset: reset)
+let retained = preservingClaudeHighs(lower, previous: high)
+precondition(((retained["windows"] as! Object)["five_hour"] as! Object)["utilization"] as? Double == 45)
+let nextWindow = sample(0, reset: reset + 18000)
+let afterReset = preservingClaudeHighs(nextWindow, previous: high)
+precondition(((afterReset["windows"] as! Object)["five_hour"] as! Object)["utilization"] as? Double == 0)
+let lateOldReading = preservingClaudeHighs(high, previous: nextWindow)
+precondition(((lateOldReading["windows"] as! Object)["five_hour"] as! Object)["utilization"] as? Double == 0)
+let writers = DispatchGroup()
+for used in [45.0, 43.0, 48.0, 44.0, 46.0] {
+    writers.enter()
+    DispatchQueue.global().async {
+        let payload: Object = ["rate_limits": ["five_hour": ["used_percentage": used, "resets_at": reset]]]
+        try! collectClaudeFeed(input: JSONSerialization.data(withJSONObject: payload), at: cache)
+        writers.leave()
+    }
+}
+writers.wait()
+precondition(readClaudeFeed(at: cache).session?.used == 48)
 let settings = directory.appendingPathComponent("claude/settings.json")
 let support = directory.appendingPathComponent("support")
 try setupClaudeFeed(at: settings, directory: support)
@@ -83,7 +107,7 @@ precondition(connection.processIdentifier == nil)
 let hanging = CodexConnection(executable: URL(fileURLWithPath: "/usr/bin/python3"), arguments: [fixture, "--hang"], timeout: 0.3)
 precondition(hanging.read().error?.contains("timed out") == true)
 hanging.stop()
-print("Passed: quota-only whitelist, private file writes, missing payload retention, stale/missing feeds, safe/idempotent settings setup, existing status-line preservation, persistent PID reuse, notifications, metadata merge, EOF recovery, timeout, shutdown.")
+print("Passed: same-window highest values, reset handling, delayed old windows, concurrent writers, quota-only whitelist, private writes, stale feeds, safe settings setup, persistent PID reuse, notifications, EOF recovery, timeout, shutdown.")
 '''
 
 with tempfile.TemporaryDirectory(prefix="usage-rings-tests-") as directory:

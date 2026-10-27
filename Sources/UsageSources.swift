@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 let feedDirectory = home.appendingPathComponent("Library/Application Support/Usage Rings", isDirectory: true)
 let claudeFeedURL = feedDirectory.appendingPathComponent("claude-usage.json")
@@ -18,12 +19,40 @@ func sanitizedClaudeFeed(_ payload: Object, receivedAt: Date = Date()) -> Object
     return ["receivedAt": receivedAt.timeIntervalSince1970, "windows": windows]
 }
 
+func preservingClaudeHighs(_ incoming: Object, previous: Object, now: Date = Date()) -> Object {
+    var result = incoming
+    guard var windows = incoming["windows"] as? [String: Object],
+          let oldWindows = previous["windows"] as? [String: Object] else { return result }
+    for (key, window) in windows {
+        guard let old = oldWindows[key], let reset = number(window["resets_at"]),
+              let oldReset = number(old["resets_at"]), oldReset > now.timeIntervalSince1970,
+              let used = number(window["utilization"]), let oldUsed = number(old["utilization"]),
+              oldUsed.isFinite, (0...100).contains(oldUsed) else { continue }
+        if reset == oldReset {
+            windows[key]?["utilization"] = max(used, oldUsed)
+        } else if reset < oldReset {
+            // A delayed reading from the previous window must not undo a reset.
+            windows[key] = old
+        }
+    }
+    result["windows"] = windows
+    return result
+}
+
 func collectClaudeFeed(input: Data = FileHandle.standardInput.readDataToEndOfFile(), at url: URL = claudeFeedURL) throws {
     guard input.count <= 1_048_576,
           let payload = try JSONSerialization.jsonObject(with: input) as? Object,
-          let feed = sanitizedClaudeFeed(payload) else { return }
+          let incoming = sanitizedClaudeFeed(payload) else { return }
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                           attributes: [.posixPermissions: 0o700])
+    let lockURL = url.appendingPathExtension("lock")
+    let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+    guard descriptor >= 0 else { throw ReadError(message: "Could not open the Claude feed lock.") }
+    defer { Darwin.close(descriptor) }
+    guard flock(descriptor, LOCK_EX) == 0 else { throw ReadError(message: "Could not lock the Claude feed.") }
+    defer { _ = flock(descriptor, LOCK_UN) }
+    let previous = (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? Object } ?? [:]
+    let feed = preservingClaudeHighs(incoming, previous: previous)
     let data = try JSONSerialization.data(withJSONObject: feed, options: [.sortedKeys])
     try data.write(to: url, options: [.atomic, .completeFileProtectionUnlessOpen])
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
@@ -197,7 +226,7 @@ final class CodexConnection {
         }
         process.terminationHandler = { [weak self] _ in self?.receive(Data(), generation: id) }
         try process.run()
-        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.1.1"]]])
+        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.1.2"]]])
         _ = try response(1)
         try send(["method": "initialized"])
     }
