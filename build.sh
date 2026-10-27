@@ -3,7 +3,7 @@ set -eu
 cd "${0:A:h}"
 APP="$PWD/build/Usage Rings.app"
 mkdir -p "$APP/Contents/MacOS"
-swiftc -swift-version 5 -O -framework AppKit -framework Security -framework LocalAuthentication Sources/main.swift -o "$APP/Contents/MacOS/UsageRings"
+swiftc -swift-version 5 -target arm64-apple-macos13.0 -O -framework AppKit -framework Security -framework LocalAuthentication Sources/main.swift -o "$APP/Contents/MacOS/UsageRings"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -4,7 +4,7 @@ Personal native macOS menu bar app for Claude and Codex subscription quotas. No 
 
 ## Build and run
 
-Requires macOS 13 or newer, Apple command-line developer tools (`xcode-select --install`), and Claude Code and Codex signed into your own subscriptions. This private repository requires access from its owner before a colleague can clone it.
+Requires an Apple Silicon Mac with macOS 13 or newer, Apple command-line developer tools (`xcode-select --install`), and Claude Code and Codex signed into your own subscriptions.
 
 ```sh
 git clone https://github.com/akhilsaisriram/usage-rings.git
