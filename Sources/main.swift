@@ -20,6 +20,13 @@ struct Provider {
     var error: String?
     var updated: Date?
     var primary: UsageWindow? { windows.first }
+    var session: UsageWindow? { windows.first { $0.name == "Session · 5 hours" } }
+    var weekly: UsageWindow? { windows.first { $0.name == "Weekly" || $0.name == "Weekly · all models" } }
+    var menuText: String {
+        let shortName = name == "Claude" ? "Cl" : "Cx"
+        let limits = [session.map { "S\(percent($0.used))" }, weekly.map { "W\(percent($0.used))" }].compactMap { $0 }
+        return shortName + " " + (limits.isEmpty ? "—" : limits.joined(separator: " "))
+    }
 }
 
 struct ReadError: Error { let message: String }
@@ -108,7 +115,7 @@ func readCodex() -> Provider {
     }
     do {
         try process.run()
-        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.0.1"]]])
+        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.0.2"]]])
         _ = try response(1)
         try send(["method": "initialized"])
         try send(["id": 2, "method": "account/rateLimits/read"])
@@ -221,6 +228,27 @@ func drawRing(in rect: NSRect, used: Double?, color: NSColor, width: CGFloat) {
     if used > 0 { arc.stroke() }
 }
 
+func menuBarImage(_ providers: [Provider]) -> NSImage {
+    let attributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium),
+        .foregroundColor: NSColor.labelColor
+    ]
+    let widths = providers.map { ceil($0.menuText.size(withAttributes: attributes).width) + 27 }
+    let spacing: CGFloat = 12
+    let width = widths.reduce(0, +) + spacing * CGFloat(max(0, providers.count - 1))
+    return NSImage(size: NSSize(width: width, height: 22), flipped: false) { _ in
+        var x: CGFloat = 0
+        for (index, provider) in providers.enumerated() {
+            let color = provider.name == "Claude" ? claudeColor : codexColor
+            drawRing(in: NSRect(x: x, y: 1, width: 20, height: 20), used: provider.session?.used, color: color, width: 2)
+            drawRing(in: NSRect(x: x + 4.5, y: 5.5, width: 11, height: 11), used: provider.weekly?.used, color: color, width: 2)
+            provider.menuText.draw(at: NSPoint(x: x + 26, y: 4), withAttributes: attributes)
+            x += widths[index] + spacing
+        }
+        return true
+    }
+}
+
 final class RingView: NSView {
     var used: Double?
     let color: NSColor
@@ -313,18 +341,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let b = NSButton(title: title, target: self, action: action); b.bezelStyle = .rounded; return b
     }
     func render() {
-        let image = NSImage(size: NSSize(width: 150, height: 22), flipped: false) { rect in
-            for i in 0...1 {
-                let p = self.providers[i], x = CGFloat(i * 77)
-                let color = i == 0 ? claudeColor : codexColor
-                drawRing(in: NSRect(x: x + 1, y: 3, width: 16, height: 16), used: p.primary?.used, color: color, width: 2.3)
-                let text = "\(i == 0 ? "Cl" : "Cx") \(p.primary.map { percent($0.used) } ?? "—")"
-                text.draw(at: NSPoint(x: x + 21, y: 4), withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium), .foregroundColor: NSColor.labelColor])
-            }; return true
-        }
+        let image = menuBarImage(providers)
+        status.length = image.size.width + 4
         status.button?.image = image
         status.button?.toolTip = providers.map { p in
-            "\(p.name): \(p.primary.map { "\($0.name), \(percent($0.used)) used" } ?? "unavailable")"
+            let session = p.session.map { "\(percent($0.used)) used" } ?? "unavailable"
+            let weekly = p.weekly.map { "\(percent($0.used)) used" } ?? "unavailable"
+            return "\(p.name): outer ring = session \(session); inner ring = weekly \(weekly)"
         }.joined(separator: "\n")
 
         var sections: [NSView] = [label("Usage Rings", size: 20, weight: .bold), label("Subscription limits · circles show % used", secondary: true)]
@@ -388,10 +411,13 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(configuration.urlCredentialStorage == nil)
     let codex = codexSnapshot(["rateLimits": ["primary": ["usedPercent": 25, "windowDurationMins": 10080, "resetsAt": 1793602977], "secondary": NSNull()]])
     precondition(codex.windows.count == 1 && codex.primary?.name == "Weekly" && codex.primary?.remaining == 75)
+    precondition(codex.session == nil && codex.weekly?.used == 25 && codex.menuText == "Cx W25%")
     let multi = codexSnapshot(["rateLimitsByLimitId": ["codex": ["primary": ["usedPercent": 10, "windowDurationMins": 300], "secondary": ["usedPercent": 40, "windowDurationMins": 10080]], "other": ["primary": ["usedPercent": 60, "windowDurationMins": 60]]]])
     precondition(multi.windows.count == 3 && multi.primary?.name == "Session · 5 hours")
     let claude = claudeSnapshot(["five_hour": ["utilization": 23.5, "resets_at": "2026-10-27T19:00:00Z"], "seven_day": ["utilization": 41.2], "seven_day_opus": ["utilization": 0], "seven_day_sonnet": NSNull()])
     precondition(claude.windows.count == 3 && claude.primary?.reset != nil && claude.windows.last?.used == 0)
+    precondition(claude.session?.used == 23.5 && claude.weekly?.used == 41.2 && claude.menuText == "Cl S24% W41%")
+    precondition(Provider(name: "Claude").menuText == "Cl —")
     precondition(claudeSnapshot([:]).error != nil && codexSnapshot([:]).error != nil)
     precondition(UsageWindow(name: "test", used: 105, reset: nil).remaining == 0)
     print("Passed: network privacy settings, weekly-only Codex, multi-bucket limits, Claude models, null/missing data, reset dates, remaining usage.")
