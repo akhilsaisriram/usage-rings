@@ -1,7 +1,5 @@
 import AppKit
 import Foundation
-import Security
-import LocalAuthentication
 
 typealias Object = [String: Any]
 let home = FileManager.default.homeDirectoryForCurrentUser
@@ -20,12 +18,16 @@ struct Provider {
     var error: String?
     var updated: Date?
     var primary: UsageWindow? { windows.first }
+    var isStale: Bool {
+        guard let updated else { return false }
+        return Date().timeIntervalSince(updated) > 600 || windows.contains { $0.reset.map { $0 <= Date() } ?? false }
+    }
     var session: UsageWindow? { windows.first { $0.name == "Session · 5 hours" } }
     var weekly: UsageWindow? { windows.first { $0.name == "Weekly" || $0.name == "Weekly · all models" } }
     var menuText: String {
         let shortName = name == "Claude" ? "Cl" : "Cx"
         let limits = [session.map { percent($0.used) }, weekly.map { percent($0.used) }].compactMap { $0 }
-        return shortName + " " + (limits.isEmpty ? "—" : limits.joined(separator: " / "))
+        return shortName + " " + (limits.isEmpty ? "—" : limits.joined(separator: " / ")) + (isStale && !limits.isEmpty ? " ~" : "")
     }
 }
 
@@ -73,58 +75,6 @@ func codexSnapshot(_ result: Object) -> Provider {
     return out
 }
 
-// A dedicated read-only RPC process; never starts a thread or sends a model prompt.
-func readCodex() -> Provider {
-    let process = Process(), input = Pipe(), output = Pipe()
-    process.executableURL = home.appendingPathComponent(".local/bin/codex")
-    process.arguments = ["app-server"]
-    process.standardInput = input; process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
-    let condition = NSCondition()
-    var buffer = Data(), responses: [Int: Object] = [:]
-    output.fileHandleForReading.readabilityHandler = { handle in
-        let bytes = handle.availableData
-        condition.lock(); defer { condition.unlock() }
-        buffer.append(bytes)
-        while let newline = buffer.firstIndex(of: 10) {
-            let line = buffer.prefix(upTo: newline)
-            buffer.removeSubrange(...newline)
-            if let object = try? JSONSerialization.jsonObject(with: line) as? Object,
-               let id = object["id"] as? Int { responses[id] = object }
-        }
-        condition.broadcast()
-    }
-    defer {
-        output.fileHandleForReading.readabilityHandler = nil
-        try? input.fileHandleForWriting.close()
-        if process.isRunning { process.terminate() }
-    }
-    func send(_ request: Object) throws {
-        var data = try JSONSerialization.data(withJSONObject: request); data.append(10)
-        try input.fileHandleForWriting.write(contentsOf: data)
-    }
-    func response(_ id: Int) throws -> Object {
-        condition.lock(); defer { condition.unlock() }
-        let deadline = Date().addingTimeInterval(25)
-        while responses[id] == nil {
-            if !condition.wait(until: deadline) { throw ReadError(message: "Codex connection timed out. Try Refresh.") }
-        }
-        let reply = responses.removeValue(forKey: id)!
-        if reply["error"] != nil { throw ReadError(message: "Codex could not read subscription limits. Run codex login in Terminal.") }
-        return reply["result"] as? Object ?? [:]
-    }
-    do {
-        try process.run()
-        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_rings", "title": "Usage Rings", "version": "1.0.4"]]])
-        _ = try response(1)
-        try send(["method": "initialized"])
-        try send(["id": 2, "method": "account/rateLimits/read"])
-        return codexSnapshot(try response(2))
-    } catch {
-        return Provider(name: "Codex", error: (error as? ReadError)?.message ?? "Cannot launch Codex at ~/.local/bin/codex.")
-    }
-}
-
 func claudeSnapshot(_ result: Object) -> Provider {
     var out = Provider(name: "Claude")
     let labels = ["five_hour": "Session · 5 hours", "seven_day": "Weekly · all models", "seven_day_sonnet": "Weekly · Sonnet", "seven_day_opus": "Weekly · Opus", "seven_day_oauth_apps": "Weekly · OAuth apps"]
@@ -143,72 +93,6 @@ func claudeSnapshot(_ result: Object) -> Provider {
     if out.windows.isEmpty { out.error = "Claude returned no quota windows." }
     else { out.updated = Date() }
     return out
-}
-
-func usageSessionConfiguration() -> URLSessionConfiguration {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.urlCache = nil
-    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-    configuration.httpCookieStorage = nil
-    configuration.httpShouldSetCookies = false
-    configuration.urlCredentialStorage = nil
-    return configuration
-}
-
-func readClaude(interactive: Bool) -> Provider {
-    var credentials: Data?
-    let file = home.appendingPathComponent(".claude/.credentials.json")
-    credentials = try? Data(contentsOf: file)
-    if credentials == nil {
-        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "Claude Code-credentials", kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne]
-        let authentication = LAContext()
-        authentication.interactionNotAllowed = !interactive
-        query[kSecUseAuthenticationContext as String] = authentication
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecSuccess { credentials = item as? Data }
-        else {
-            let reason = status == errSecInteractionNotAllowed || status == errSecAuthFailed
-                ? "Click Connect Claude to allow access to the existing Claude Code login."
-                : "Claude login unavailable. Run claude auth login in Terminal, then Connect Claude."
-            return Provider(name: "Claude", error: reason)
-        }
-    }
-    guard let data = credentials,
-          let json = try? JSONSerialization.jsonObject(with: data) as? Object,
-          let oauth = json["claudeAiOauth"] as? Object,
-          let token = oauth["accessToken"] as? String, !token.isEmpty else {
-        return Provider(name: "Claude", error: "No Claude subscription login found. Run claude auth login in Terminal.")
-    }
-    var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
-    request.timeoutInterval = 20
-    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-    request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-    let semaphore = DispatchSemaphore(value: 0)
-    var payload: Data?, statusCode: Int?, failed = false
-    let session = URLSession(configuration: usageSessionConfiguration())
-    defer { session.invalidateAndCancel() }
-    let task = session.dataTask(with: request) { data, response, error in
-        payload = data; statusCode = (response as? HTTPURLResponse)?.statusCode
-        failed = error != nil; semaphore.signal()
-    }
-    task.resume()
-    guard semaphore.wait(timeout: .now() + 23) == .success else {
-        task.cancel(); return Provider(name: "Claude", error: "Claude request timed out. Try Refresh.")
-    }
-    guard !failed, statusCode == 200, let payload,
-          let result = try? JSONSerialization.jsonObject(with: payload) as? Object else {
-        let message: String
-        switch statusCode {
-        case 401, 403: message = "Claude login expired or lacks usage access. Run claude auth login in Terminal."
-        case 429: message = "Claude usage is rate limited. Automatic refresh will retry in five minutes."
-        default: message = "Cannot reach Claude usage\(statusCode.map { " (HTTP \($0))" } ?? ""). Try Refresh."
-        }
-        return Provider(name: "Claude", error: message)
-    }
-    return claudeSnapshot(result)
 }
 
 let claudeColor = NSColor(calibratedRed: 0.80, green: 0.46, blue: 0.32, alpha: 1)
@@ -297,6 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var timer: Timer?
     var loading = false
     var content: NSViewController!
+    let codex = CodexConnection()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         status = NSStatusBar.system.statusItem(withLength: 154)
@@ -304,8 +189,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.button?.setAccessibilityLabel("Claude and Codex subscription usage")
         content = NSViewController(); popover.contentViewController = content
         popover.behavior = .transient; popover.animates = true
-        render(); refresh(interactive: false)
-        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.refresh(interactive: false) }
+        codex.onUpdate = { [weak self] provider in
+            DispatchQueue.main.async { self?.providers[1] = provider; self?.render() }
+        }
+        render(); refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.providers[0] = readClaudeFeed(); self.render()
+        }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke), name: NSWorkspace.didWakeNotification, object: nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.toggle() }
     }
@@ -313,7 +204,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !popover.isShown { toggle() }
         return false
     }
-    @objc func woke() { refresh(interactive: false) }
+    func applicationWillTerminate(_ notification: Notification) { timer?.invalidate(); codex.stop() }
+    @objc func woke() { refresh() }
     @objc func toggle() {
         if popover.isShown { popover.performClose(nil) }
         else if let button = status.button {
@@ -321,22 +213,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate(ignoringOtherApps: true)
         }
     }
-    @objc func refreshAction() { refresh(interactive: false) }
-    @objc func connectClaude() { refresh(interactive: true) }
-    func refresh(interactive: Bool) {
-        guard !loading else { return }; loading = true; render()
-        // Independent reads finish separately so a provider timeout does not hide the other.
-        let group = DispatchGroup()
-        for index in 0...1 {
-            group.enter()
-            DispatchQueue.global(qos: .utility).async {
-                let result = index == 0 ? readClaude(interactive: interactive) : readCodex()
-                DispatchQueue.main.async {
-                    self.providers[index] = result; self.render(); group.leave()
-                }
+    @objc func refreshAction() { refresh() }
+    @objc func connectClaude() {
+        do { try setupClaudeFeed(); providers[0] = readClaudeFeed() }
+        catch { providers[0] = Provider(name: "Claude", error: (error as? ReadError)?.message ?? "Could not set up the Claude feed.") }
+        render()
+    }
+    func refresh() {
+        providers[0] = readClaudeFeed()
+        guard !loading else { render(); return }
+        loading = true; render()
+        DispatchQueue.global(qos: .utility).async {
+            let result = self.codex.read()
+            DispatchQueue.main.async {
+                self.providers[1] = result; self.loading = false; self.render()
             }
         }
-        group.notify(queue: .main) { self.loading = false; self.render() }
     }
     @objc func claudeWeb() { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!) }
     @objc func codexWeb() { NSWorkspace.shared.open(URL(string: "https://chatgpt.com/codex/settings/usage")!) }
@@ -351,7 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.button?.toolTip = providers.map { p in
             let session = p.session.map { "\(percent($0.used)) used" } ?? "unavailable"
             let weekly = p.weekly.map { "\(percent($0.used)) used" } ?? "unavailable"
-            return "\(p.name): outer ring = session \(session); inner ring = weekly \(weekly)"
+            return "\(p.name): outer ring = session \(session); inner ring = weekly \(weekly)\(p.isStale ? "; last-known reading, refresh source" : "")"
         }.joined(separator: "\n")
 
         var sections: [NSView] = [label("Usage Rings", size: 20, weight: .bold), label("Subscription limits · circles show % used", secondary: true)]
@@ -368,9 +260,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for detail in p.details { rows.append(label(detail, size: 11, secondary: true)) }
             if let updated = p.updated {
                 let f = DateFormatter(); f.timeStyle = .short
-                rows.append(label("Updated \(f.string(from: updated))", size: 10, secondary: true))
+                rows.append(label("\(p.isStale ? "Last known" : "Received") \(f.string(from: updated))\(p.isStale ? " · stale" : "")", size: 10, secondary: true))
             }
-            if index == 0 && p.error != nil { rows.append(button("Connect Claude…", #selector(connectClaude))) }
+            if index == 0 && p.error != nil { rows.append(button("Set up Claude feed…", #selector(connectClaude))) }
             let section = stack(rows, spacing: 9)
             section.widthAnchor.constraint(equalToConstant: 360).isActive = true
             sections.append(NSBox.separator())
@@ -380,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let refreshButton = button(loading ? "Refreshing…" : "Refresh", #selector(refreshAction))
         refreshButton.isEnabled = !loading
         sections.append(stack([refreshButton, button("Claude ↗", #selector(claudeWeb)), button("Codex ↗", #selector(codexWeb)), button("Quit", #selector(quit))], vertical: false, spacing: 6))
-        sections.append(label("Refreshes every 5 minutes · unavailable ≠ zero", size: 10, secondary: true))
+        sections.append(label("Local Claude feed + Codex events · ~ means stale", size: 10, secondary: true))
         let column = stack(sections, spacing: 12)
         column.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         column.translatesAutoresizingMaskIntoConstraints = false
@@ -408,11 +300,6 @@ func diagnose(_ provider: Provider) -> Object {
      "details": provider.details]
 }
 if CommandLine.arguments.contains("--self-test") {
-    let configuration = usageSessionConfiguration()
-    precondition(configuration.urlCache == nil)
-    precondition(configuration.requestCachePolicy == .reloadIgnoringLocalCacheData)
-    precondition(configuration.httpCookieStorage == nil && !configuration.httpShouldSetCookies)
-    precondition(configuration.urlCredentialStorage == nil)
     let codex = codexSnapshot(["rateLimits": ["primary": ["usedPercent": 25, "windowDurationMins": 10080, "resetsAt": 1793602977], "secondary": NSNull()]])
     precondition(codex.windows.count == 1 && codex.primary?.name == "Weekly" && codex.primary?.remaining == 75)
     precondition(codex.session == nil && codex.weekly?.used == 25 && codex.menuText == "Cx 25%")
@@ -424,9 +311,16 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(Provider(name: "Claude").menuText == "Cl —")
     precondition(claudeSnapshot([:]).error != nil && codexSnapshot([:]).error != nil)
     precondition(UsageWindow(name: "test", used: 105, reset: nil).remaining == 0)
-    print("Passed: network privacy settings, weekly-only Codex, multi-bucket limits, Claude models, null/missing data, reset dates, remaining usage.")
+    print("Passed: passive usage sources, weekly-only Codex, multi-bucket limits, Claude models, null/missing data, reset dates, remaining usage.")
+} else if CommandLine.arguments.contains("--collect-claude") {
+    do { try collectClaudeFeed() } catch { exit(1) }
+} else if CommandLine.arguments.contains("--setup-claude-feed") {
+    do { try setupClaudeFeed(); print("Claude local feed configured. Use Claude Code to supply usage.") }
+    catch { print((error as? ReadError)?.message ?? "Claude feed setup failed."); exit(1) }
 } else if CommandLine.arguments.contains("--diagnose") {
-    let results = [diagnose(readClaude(interactive: CommandLine.arguments.contains("--connect-claude"))), diagnose(readCodex())]
+    let connection = CodexConnection()
+    let results = [diagnose(readClaudeFeed()), diagnose(connection.read())]
+    connection.stop()
     if let data = try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys]), let s = String(data: data, encoding: .utf8) { print(s) }
 } else {
     let app = NSApplication.shared

@@ -1,6 +1,6 @@
 # Usage Rings
 
-Personal native macOS menu bar app for Claude and Codex subscription quotas. No packages, API key, server, or model calls required.
+Personal native macOS menu bar app for Claude and Codex subscription quotas. No hosted server, API key, or model prompts required.
 
 ## Build and run
 
@@ -15,27 +15,30 @@ open "build/Usage Rings.app"
 
 The menu bar shows **Cl** (Claude) and **Cx** (Codex), each with concentric rings: **outer = session**, **inner = weekly**. Percentages appear as **session / weekly**, without words, for example `Cl 39% / 82%`. Each ring uses its provider color below 80%, orange from 80%, and red from 95%. Unavailable limits have no ring or percentage; a weekly-only Codex account shows `Cx 26%`. Click for all quota windows returned by the provider, percentages used/remaining, reset countdowns and dates, credits where supplied, and connection status.
 
-Refresh runs every five minutes, on wake, and manually. Errors replace current numbers so old values cannot appear live. Unavailable data uses a dash, never zero. No login-item changes are made; add the built app in System Settings → General → Login Items if desired. Command-drag its menu bar item to reposition it.
+The widget checks the local Claude feed every 15 seconds; this does not make a network request. Codex stays connected and consumes available notifications. Startup, waking, and manual Refresh read a Codex snapshot through that connection. There is no scheduled remote usage polling. `~` marks last-known values older than 10 minutes or past a reported reset. Timestamps mean received locally, not guaranteed fresh account-wide usage. Unavailable data uses a dash, never zero. No login-item changes are made; add the built app in System Settings → General → Login Items if desired. Command-drag its menu bar item to reposition it.
 
 ## Account connections
 
-- **Codex:** existing ChatGPT sign-in via `~/.local/bin/codex app-server`, using the documented initialize handshake and `account/rateLimits/read`. No model sessions are created. Run `codex login` in Terminal if needed.
-- **Claude:** reads `~/.claude/.credentials.json`, or the `Claude Code-credentials` Keychain item. Background reads never show a Keychain prompt. **Connect Claude** explicitly allows macOS to ask for access. Run `claude auth login` in Terminal if no subscription token is present. Browser login alone does not establish a readable terminal login.
-- Claude usage uses `https://api.anthropic.com/api/oauth/usage` with the existing access token. This is an internal endpoint used by usage trackers, not a documented stable public API, and can change. Credentials are never refreshed or rewritten by this app; Claude Code owns login renewal.
-- Claude requests use an ephemeral network session with URL caching, cookies, and credential storage disabled. Each session is invalidated after its request. This does not remove any caches created by older versions or control Codex CLI's own storage.
-- No tokens, cookie values, account IDs, or emails are logged or persisted. No browser cookie extraction. Diagnostic output includes only quota data and connection errors.
-- Absolute message/token allowances are displayed only if supplied by the provider; a percentage is not converted into an invented message count. Credit balances retain provider units.
+- **Claude:** uses the documented Claude Code status-line payload. Select **Set up Claude feed** in the app, or run the setup command below. It installs a stable helper in `~/Library/Application Support/Usage Rings/UsageRingsFeed` and adds its command to `~/.claude/settings.json`. Existing unrelated status lines are refused rather than overwritten. Settings are backed up privately before the first setup. If you already have a status-line script, invoke the helper with `--collect-claude` from your script and pass the same stdin JSON to it; preserve your script's normal output.
+- The collector saves only allowed session/weekly/spend-limit percentages, reset timestamps, and its local receipt time in `claude-usage.json`, with owner-only permissions. It does not save messages, transcript paths, tokens, or the full status-line payload. It does not read Keychain or Claude credentials and makes no direct Claude API request.
+- Use Claude Code after setup. Its settings normally reload automatically; restart Claude Code if the feed remains absent. The status-line fields may be absent before the first model response. Installing a custom status line can hide some built-in Claude footer hints; the helper prints a small usage line instead.
+- Claude's browser/desktop-only activity may not appear until Claude Code receives updated quota data. Missing payloads retain the last known reading rather than writing a fake zero. Model-specific limits not supplied by the documented status-line payload cannot be displayed.
+- **Codex:** owns one `~/.local/bin/codex app-server` process and uses its documented initialize handshake, `account/rateLimits/read`, and `account/rateLimits/updated`. The widget does not read Codex tokens. The CLI still performs its own authentication/network operations. A separate app-server connection is not guaranteed to receive every change caused by other apps immediately; use Refresh for a new snapshot.
+- No model prompts, browser-cookie extraction, or token logging. The previous direct Claude OAuth reader has been removed. Old versions' caches and Keychain permissions are not deleted by this change.
+- To disable the Claude feed, remove only its `statusLine` setting (or restore your prior setting). The private backup is `~/Library/Application Support/Usage Rings/claude-settings-before-feed.json`; do not blindly restore it over newer unrelated settings.
 
 ## Checks
 
 ```sh
 "build/Usage Rings.app/Contents/MacOS/UsageRings" --self-test
+"build/Usage Rings.app/Contents/MacOS/UsageRings" --setup-claude-feed
 "build/Usage Rings.app/Contents/MacOS/UsageRings" --diagnose
+python3 Tests/run.py
 open "build/Usage Rings.app" --args --preview
 ```
 
-`--diagnose --connect-claude` permits a foreground Keychain prompt. Rebuilding changes the ad-hoc signature and may require granting access again. No Git actions are part of this project.
+`--diagnose` prints quota data and source errors only. `Tests/run.py` uses a fake local CLI and temporary files; it does not access account credentials or the network. No Git actions are part of the build.
 
 Local builds enable hardened runtime and verify their ad-hoc signature. They are not Developer ID signed or Apple notarized; macOS may still block downloaded builds.
 
-Sources: [Codex app server](https://learn.chatgpt.com/docs/app-server), [Claude status-line quota fields](https://code.claude.com/docs/en/statusline), [CodexBar Claude connection implementation notes](https://github.com/steipete/CodexBar/blob/main/docs/claude.md).
+Sources: [Codex app server](https://learn.chatgpt.com/docs/app-server), [Claude status-line quota fields](https://code.claude.com/docs/en/statusline).
